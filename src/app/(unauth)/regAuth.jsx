@@ -1,10 +1,10 @@
 import * as Application from 'expo-application';
 import * as Contacts from 'expo-contacts/legacy'; // Added for direct address book access
-import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useAuth } from '../../auth/AuthContext';
 
 // SecureStore Storage Keys
 const DEVICE_ID_KEY = 'secure_device_uuid';
@@ -12,8 +12,8 @@ const USER_ID_KEY = 'secure_user_id';
 const PLAIN_TOKEN_KEY = 'secure_plain_token';
 
 export default function RegistrationScreen() {
-  const router = useRouter();
-  const [db, setDb] = useState(null); 
+  const { refreshSession } = useAuth();
+  const [db, setDb] = useState(null);
   const [deviceId, setDeviceId] = useState(null);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -187,14 +187,15 @@ export default function RegistrationScreen() {
           [
             { 
               text: 'Open App', 
-              onPress: () => {
+              onPress: async () => {
                 setFirstName('');
                 setLastName('');
                 setPhoneNumber('');
-                
-                // Route out of onboarding cleanly to your synchronized listing screen
-                router.replace('/(auth)/contacts');
-              } 
+
+                // Re-read the stored token so the root layout's route guard flips
+                // to authenticated and moves the user to the chats list
+                await refreshSession();
+              }
             }
           ]
         );

@@ -47,7 +47,7 @@ export default function ChatsListScreen() {
             }));
 
           // Send updated local contact book list to your server backend 
-          const syncResponse = await fetch('https://chatapp-backend-m6bp.com/api/contacts/sync-bulk', {
+          const syncResponse = await fetch('https://chatapp-backend-m6bp.onrender.com/api/contacts/sync-bulk', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contacts: contactPayload }),
