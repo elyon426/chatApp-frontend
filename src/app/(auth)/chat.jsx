@@ -27,7 +27,7 @@ export default function IndividualChatScreen() {
       setMyUserId(savedUid || 'me');
 
       // Connect to your WebSocket endpoint (passing token via query string if required)
-      const wsUrl = `wss://://your-chat-server.com{token}&userId=${savedUid}`;
+      const wsUrl = `wss://chat-server-docker-fy2r.onrender.com?token=${encodeURIComponent(token)}`;
       const ws = new WebSocket(wsUrl);
       socketRef.current = ws;
 

@@ -4,22 +4,31 @@
     "slug": "chat-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/donwload.png",
+    "icon": "./assets/images/download.png",
     "scheme": "chatapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/donwload.png"
+      "icon": "./assets/images/download.png",
+      "bundleIdentifier": "com.elyon001.chatapp",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/donwload.png"
+        "foregroundImage": "./assets/images/download.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
+      ],
+      "package": "com.elyon001.chatapp"
     },
     "web": {
       "output": "server",
-      "favicon": "./assets/images/donwload.png"
+      "favicon": "./assets/images/download.png"
     },
     "plugins": [
       "expo-router",
@@ -27,7 +36,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#E6F4FE",
-          "image": "./assets/images/donwload.png",
+          "image": "./assets/images/download.png",
           "imageWidth": 200
         }
       ],
@@ -43,6 +52,17 @@
     "experiments": {
       "typedRoutes": false,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "8f4353d4-fd19-41ea-bf8b-c1158982bf77"
+      }
+    },
+    "owner": "elyon001"
   }
 }
