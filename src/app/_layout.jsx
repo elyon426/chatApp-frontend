@@ -3,7 +3,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '../auth/AuthContext';
 
-// Keep the splash screen up until we know whether the user is signed in
+// Prevent the native splash screen from hiding automatically on boot
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function RootNavigator() {
@@ -12,31 +12,32 @@ function RootNavigator() {
   const router = useRouter();
 
   useEffect(() => {
+    // Stop completely if SecureStore is still reading the device storage
     if (!isReady) return;
 
-    // Hide splash screen once we know the state
+    // Hide the splash screen now that we accurately know the authentication state
     SplashScreen.hideAsync().catch(() => {});
 
-    // Determine what route group the user is attempting to view
+    // Detect which directory group the user is currently looking at
     const inAuthGroup = segments[0] === '(auth)';
     const inUnauthGroup = segments[0] === '(unauth)';
 
     if (!isAuthenticated) {
-      // If NOT logged in, and NOT already in the unauth screens -> boot them to registration
-      if (!inUnauthGroup) {
+      // Rule 1: If NOT logged in, and trying to browse private screens -> force to registration
+      if (inAuthGroup) {
         router.replace('/(unauth)/regAuth');
       }
     } else {
-      // If logged in, and trying to access landing/auth screens -> route them to the dashboard
-      if (!inAuthGroup) {
+      // Rule 2: If logged in, and trying to browse registration/landing screens -> force to chats
+      if (inUnauthGroup) {
         router.replace('/(auth)/contacts');
       }
     }
   }, [isReady, isAuthenticated, segments]);
 
+  // Keep the UI blank while the splash screen is up to prevent rendering glitches
   if (!isReady) return null;
 
-  // Render a clean Expo Router native Stack tree
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
@@ -53,4 +54,3 @@ export default function RootLayout() {
     </AuthProvider>
   );
 }
-
