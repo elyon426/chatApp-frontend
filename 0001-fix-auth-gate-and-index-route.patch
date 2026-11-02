@@ -1,0 +1,312 @@
+From 35ca8e20bb14f7d6221fba561e0647da6e29d755 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 2 Nov 2026 16:01:14 +0300
+Subject: [PATCH] Fix 'no route found': add root layout, index route and auth
+ guard
+
+- Add src/app/_layout.jsx with Stack.Protected guards driven by auth state
+- Add src/app/index.jsx that redirects to chats or registration
+- Add src/auth/AuthContext.jsx to read the SecureStore token at startup
+- (auth)/_layout: remove per-group gate, fix screen name index -> contacts
+- regAuth: refresh auth state after registration instead of manual replace
+- contacts: fix sync-bulk URL (missing .onrender host segment)
+---
+ src/app/(auth)/_layout.jsx   | 75 ++++++++----------------------------
+ src/app/(auth)/contacts.jsx  |  2 +-
+ src/app/(unauth)/regAuth.jsx | 17 ++++----
+ src/app/_layout.jsx          | 40 +++++++++++++++++++
+ src/app/index.jsx            | 12 ++++++
+ src/auth/AuthContext.jsx     | 58 ++++++++++++++++++++++++++++
+ 6 files changed, 136 insertions(+), 68 deletions(-)
+ create mode 100644 src/app/_layout.jsx
+ create mode 100644 src/app/index.jsx
+ create mode 100644 src/auth/AuthContext.jsx
+
+diff --git a/src/app/(auth)/_layout.jsx b/src/app/(auth)/_layout.jsx
+index 86c6e87..59a2b26 100644
+--- a/src/app/(auth)/_layout.jsx
++++ b/src/app/(auth)/_layout.jsx
+@@ -1,42 +1,8 @@
+-import React, { useEffect, useState } from 'react';
+-import { Stack, useRouter } from 'expo-router';
+-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+-import * as SecureStore from 'expo-secure-store';
++import { Stack } from 'expo-router';
+ 
++// Auth gating now lives in the root layout (Stack.Protected), so this layout
++// only defines how the signed-in screens are presented.
+ export default function AuthLayout() {
+-  const router = useRouter();
+-  const [checkingAuth, setCheckingAuth] = useState(true);
+-
+-  // 1. Session Gate: Check for access token before opening authenticated screens
+-  useEffect(() => {
+-    async function verifySessionGate() {
+-      try {
+-        const token = await SecureStore.getItemAsync('secure_plain_token');
+-        
+-        // IF no token redirect to (unauth)/regAuth instead of /registration
+-        if (!token) {
+-          router.replace('/(unauth)/regAuth'); 
+-        }
+-      } catch (error) {
+-        console.error("Auth security gate failure:", error);
+-      } finally {
+-        setCheckingAuth(false);
+-      }
+-    }
+-
+-    verifySessionGate();
+-  }, []);
+-
+-  // Show a full-screen loading spinner while checking security credentials
+-  if (checkingAuth) {
+-    return (
+-      <View style={styles.center}>
+-        <ActivityIndicator size="large" color="#007AFF" />
+-      </View>
+-    );
+-  }
+-
+-  // 2. Navigation Presentation Definitions
+   return (
+     <Stack
+       screenOptions={{
+@@ -51,32 +17,23 @@ export default function AuthLayout() {
+         headerShadowVisible: false, // Cleaner visual appearance across platforms
+       }}
+     >
+-      {/* Main Chats/Contacts Listing Screen Config (The group root index) */}
+-      <Stack.Screen 
+-        name="index" 
+-        options={{ 
++      {/* Chats list screen (custom header is built inside the file) */}
++      <Stack.Screen
++        name="contacts"
++        options={{
+           title: 'Chats',
+-          headerShown: false, // Hides native navbar since we built custom headers inside the file
+-        }} 
++          headerShown: false,
++        }}
+       />
+ 
+-      {/* Individual Message Room Config */}
+-      <Stack.Screen 
+-        name="chat" 
+-        options={{ 
+-          title: '', // Left blank to dynamically emphasize custom titles built in chat.jsx
+-          headerBackTitle: 'Back', // iOS back arrow button text title string
+-        }} 
++      {/* Individual message room */}
++      <Stack.Screen
++        name="chat"
++        options={{
++          title: '', // Custom title is built in chat.jsx
++          headerBackTitle: 'Back', // iOS back arrow button text
++        }}
+       />
+     </Stack>
+   );
+ }
+-
+-const styles = StyleSheet.create({
+-  center: {
+-    flex: 1,
+-    justifyContent: 'center',
+-    alignItems: 'center',
+-    backgroundColor: '#f8f9fa',
+-  },
+-});
+diff --git a/src/app/(auth)/contacts.jsx b/src/app/(auth)/contacts.jsx
+index c5bd492..af43ac0 100644
+--- a/src/app/(auth)/contacts.jsx
++++ b/src/app/(auth)/contacts.jsx
+@@ -47,7 +47,7 @@ export default function ChatsListScreen() {
+             }));
+ 
+           // Send updated local contact book list to your server backend 
+-          const syncResponse = await fetch('https://chatapp-backend-m6bp.com/api/contacts/sync-bulk', {
++          const syncResponse = await fetch('https://chatapp-backend-m6bp.onrender.com/api/contacts/sync-bulk', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ contacts: contactPayload }),
+diff --git a/src/app/(unauth)/regAuth.jsx b/src/app/(unauth)/regAuth.jsx
+index f9185cd..f2056fd 100644
+--- a/src/app/(unauth)/regAuth.jsx
++++ b/src/app/(unauth)/regAuth.jsx
+@@ -1,10 +1,10 @@
+ import * as Application from 'expo-application';
+ import * as Contacts from 'expo-contacts/legacy'; // Added for direct address book access
+-import { useRouter } from 'expo-router';
+ import * as SecureStore from 'expo-secure-store';
+ import * as SQLite from 'expo-sqlite';
+ import { useEffect, useState } from 'react';
+ import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
++import { useAuth } from '../../auth/AuthContext';
+ 
+ // SecureStore Storage Keys
+ const DEVICE_ID_KEY = 'secure_device_uuid';
+@@ -12,8 +12,8 @@ const USER_ID_KEY = 'secure_user_id';
+ const PLAIN_TOKEN_KEY = 'secure_plain_token';
+ 
+ export default function RegistrationScreen() {
+-  const router = useRouter();
+-  const [db, setDb] = useState(null); 
++  const { refreshSession } = useAuth();
++  const [db, setDb] = useState(null);
+   const [deviceId, setDeviceId] = useState(null);
+   const [firstName, setFirstName] = useState('');
+   const [lastName, setLastName] = useState('');
+@@ -187,14 +187,15 @@ export default function RegistrationScreen() {
+           [
+             { 
+               text: 'Open App', 
+-              onPress: () => {
++              onPress: async () => {
+                 setFirstName('');
+                 setLastName('');
+                 setPhoneNumber('');
+-                
+-                // Route out of onboarding cleanly to your synchronized listing screen
+-                router.replace('/(auth)/contacts');
+-              } 
++
++                // Re-read the stored token so the root layout's route guard flips
++                // to authenticated and moves the user to the chats list
++                await refreshSession();
++              }
+             }
+           ]
+         );
+diff --git a/src/app/_layout.jsx b/src/app/_layout.jsx
+new file mode 100644
+index 0000000..e28ba6e
+--- /dev/null
++++ b/src/app/_layout.jsx
+@@ -0,0 +1,40 @@
++import { Stack } from 'expo-router';
++import * as SplashScreen from 'expo-splash-screen';
++import { useEffect } from 'react';
++import { AuthProvider, useAuth } from '../auth/AuthContext';
++
++// Keep the splash screen up until we know whether the user is signed in
++SplashScreen.preventAutoHideAsync().catch(() => {});
++
++function RootNavigator() {
++  const { isReady, isAuthenticated } = useAuth();
++
++  useEffect(() => {
++    if (isReady) SplashScreen.hideAsync().catch(() => {});
++  }, [isReady]);
++
++  if (!isReady) return null;
++
++  return (
++    <Stack screenOptions={{ headerShown: false }}>
++      {/* App entry: redirects to the right group based on auth state */}
++      <Stack.Screen name="index" />
++
++      <Stack.Protected guard={isAuthenticated} redirectTo="/(unauth)/regAuth">
++        <Stack.Screen name="(auth)" />
++      </Stack.Protected>
++
++      <Stack.Protected guard={!isAuthenticated} redirectTo="/(auth)/contacts">
++        <Stack.Screen name="(unauth)" />
++      </Stack.Protected>
++    </Stack>
++  );
++}
++
++export default function RootLayout() {
++  return (
++    <AuthProvider>
++      <RootNavigator />
++    </AuthProvider>
++  );
++}
+diff --git a/src/app/index.jsx b/src/app/index.jsx
+new file mode 100644
+index 0000000..bf90ef7
+--- /dev/null
++++ b/src/app/index.jsx
+@@ -0,0 +1,12 @@
++import { Redirect } from 'expo-router';
++import { useAuth } from '../auth/AuthContext';
++
++// App entry route ("/"). Sends the user to the chat list when signed in,
++// otherwise to registration.
++export default function Index() {
++  const { isAuthenticated } = useAuth();
++
++  return (
++    <Redirect href={isAuthenticated ? '/(auth)/contacts' : '/(unauth)/regAuth'} />
++  );
++}
+diff --git a/src/auth/AuthContext.jsx b/src/auth/AuthContext.jsx
+new file mode 100644
+index 0000000..99030a7
+--- /dev/null
++++ b/src/auth/AuthContext.jsx
+@@ -0,0 +1,58 @@
++import * as SecureStore from 'expo-secure-store';
++import { createContext, useCallback, useContext, useEffect, useState } from 'react';
++
++// Same keys that (unauth)/regAuth.jsx writes after a successful registration
++const USER_ID_KEY = 'secure_user_id';
++const PLAIN_TOKEN_KEY = 'secure_plain_token';
++
++const AuthContext = createContext({
++  isReady: false,
++  isAuthenticated: false,
++  refreshSession: async () => {},
++  signOut: async () => {},
++});
++
++export function AuthProvider({ children }) {
++  const [isReady, setIsReady] = useState(false);
++  const [token, setToken] = useState(null);
++
++  // Reads the stored credentials and updates auth state.
++  // Call again after registration so route guards pick up the new session.
++  const refreshSession = useCallback(async () => {
++    try {
++      const stored = await SecureStore.getItemAsync(PLAIN_TOKEN_KEY);
++      setToken(stored || null);
++    } catch (error) {
++      console.error('Auth session read failure:', error);
++      setToken(null);
++    } finally {
++      setIsReady(true);
++    }
++  }, []);
++
++  const signOut = useCallback(async () => {
++    try {
++      await SecureStore.deleteItemAsync(PLAIN_TOKEN_KEY);
++      await SecureStore.deleteItemAsync(USER_ID_KEY);
++    } catch (error) {
++      console.error('Auth sign-out failure:', error);
++    }
++    setToken(null);
++  }, []);
++
++  useEffect(() => {
++    refreshSession();
++  }, [refreshSession]);
++
++  return (
++    <AuthContext.Provider
++      value={{ isReady, isAuthenticated: !!token, refreshSession, signOut }}
++    >
++      {children}
++    </AuthContext.Provider>
++  );
++}
++
++export function useAuth() {
++  return useContext(AuthContext);
++}
+-- 
+2.43.0
+

@@ -4,11 +4,11 @@
     "slug": "chat-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/download.png",
+    "icon": "./assets/images/chat-logo.svg",
     "scheme": "chatapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/download.png",
+      "icon": "./assets/images/chat-logo.svvg",
       "bundleIdentifier": "com.elyon001.chatapp",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -17,7 +17,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/download.png"
+        "foregroundImage": "./assets/images/chat-logo.svg"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -28,7 +28,7 @@
     },
     "web": {
       "output": "server",
-      "favicon": "./assets/images/download.png"
+      "favicon": "./assets/images/chat-logo.svg"
     },
     "plugins": [
       "expo-router",
@@ -36,7 +36,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#E6F4FE",
-          "image": "./assets/images/download.png",
+          "image": "./assets/images/chat-logo.svg",
           "imageWidth": 200
         }
       ],
