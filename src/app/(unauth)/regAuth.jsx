@@ -10,6 +10,7 @@ import { useAuth } from '../../auth/AuthContext';
 const DEVICE_ID_KEY = 'secure_device_uuid';
 const USER_ID_KEY = 'secure_user_id';
 const PLAIN_TOKEN_KEY = 'secure_plain_token';
+const SERVER = 'https://chatapp-backend-m6bp.onrender.com';
 
 export default function RegistrationScreen() {
   const { refreshSession } = useAuth();
@@ -72,61 +73,62 @@ export default function RegistrationScreen() {
     initializeAppEngine();
   }, []);
 
-  // 2. CONTACT SYNCHRONIZATION PIPELINE (Baked cleanly inside)
-  const runAddressBookSync = async (databaseInstance) => {
-    try {
-      // Ask system for contact book access rules
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        console.log('Address book read permissions were denied by user.');
-        return;
-      }
-
-      // Fetch the full contact payload profile dump
-      const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
-      });
-
-      if (!data || data.length === 0) return;
-
-      // Map profiles into an anonymous structural lookup array
-      const contactPayload = data
-        .filter(c => c.phoneNumbers && c.phoneNumbers.length > 0)
-        .map(c => ({
-          name: c.name,
-          phone: c.phoneNumbers[0].number.replace(/[\s\-()]/g, '') // Strips formatting
-        }));
-
-      // Direct POST payload execution (No Token needed)
-      const syncResponse = await fetch('https://chatapp-backend-m6bp.onrender.com/api/contacts/sync-bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contacts: contactPayload }),
-      });
-
-      if (syncResponse.ok) {
-        const verifiedUsersArray = await syncResponse.json();
-
-        // Cross-examine backend results against local records to preserve nicknames
-        for (const matchedUser of verifiedUsersArray) {
-          const matchedPhoneClean = matchedUser.phone.replace(/[\s\-()]/g, '');
-          const localItem = contactPayload.find(c => c.phone === matchedPhoneClean);
-          
-          // Fallback to official application registry handle name if local mapping missing
-          const finalDisplayName = localItem ? localItem.name : matchedUser.name;
-
-          // INSERT OR IGNORE locks down the phone book name customization rules
-          await databaseInstance.runAsync(
-            'INSERT OR IGNORE INTO app_users (user_id, name, phone) VALUES (?, ?, ?)',
-            [String(matchedUser.userId), String(finalDisplayName), String(matchedUser.phone)]
-          );
-        }
-        console.log("Local SQL engine cache sync processing finished smoothly.");
-      }
-    } catch (err) {
-      console.error("Background data sync pipeline tracking failure:", err);
+  // 2. CONTACT SYNCHRONIZATION PIPELINE
+const runAddressBookSync = async (databaseInstance) => {
+  try {
+    const { status } = await Contacts.requestPermissionsAsync();
+    if (status !== 'granted') {
+      console.log('Address book read permissions were denied by user.');
+      return;
     }
-  };
+
+    const { data } = await Contacts.getContactsAsync({
+      fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
+    });
+    if (!data || data.length === 0) return;
+
+    // clean phone number -> the name saved in the user's phone book.
+    // Keys are unique, so this also removes duplicate numbers.
+    const nameByPhone = new Map();
+    for (const contact of data) {
+      for (const p of contact.phoneNumbers ?? []) {
+        if (!p.number) continue;
+        const phone = cleanNumber(p.number);
+        if (!nameByPhone.has(phone)) {
+          nameByPhone.set(phone, contact.name || 'No Name');
+        }
+      }
+    }
+    if (nameByPhone.size === 0) return;
+
+    const response = await fetch(`${SERVER}/api/auth/sync-bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumbers: [...nameByPhone.keys()] }),
+    });
+
+    if (!response.ok) {
+      console.log('Contact sync rejected by server:', response.status);
+      return;
+    }
+
+    const { matches } = await response.json();
+
+    for (const m of matches ?? []) {
+      // Prefer the name from the phone book, fall back to the app username
+      const displayName = nameByPhone.get(cleanNumber(m.phone_number)) || m.username;
+
+      // INSERT OR IGNORE keeps any existing local name
+      await databaseInstance.runAsync(
+        'INSERT OR IGNORE INTO app_users (user_id, name, phone) VALUES (?, ?, ?)',
+        [String(m.user_id), String(displayName), String(m.phone_number)]
+      );
+    }
+    console.log(`Cached ${matches?.length ?? 0} app contacts.`);
+  } catch (err) {
+    console.error('Background data sync pipeline tracking failure:', err);
+  }
+};
 
   // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
   const handleValidateAndSubmit = async () => {
@@ -160,9 +162,7 @@ export default function RegistrationScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!response.ok || !data.success) {
-           throw new Error(data.message || 'Registration failed');
-       }
+      
 
       if (response.ok) {
         const data = await response.json();
