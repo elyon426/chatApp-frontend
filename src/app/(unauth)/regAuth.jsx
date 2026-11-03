@@ -1,5 +1,5 @@
 import * as Application from 'expo-application';
-import * as Contacts from 'expo-contacts/legacy'; // Added for direct address book access
+import { normalizePhone, syncAddressBook } from '../../contacts/syncContacts';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { useEffect, useState } from 'react';
@@ -12,7 +12,6 @@ const USER_ID_KEY = 'secure_user_id';
 const PLAIN_TOKEN_KEY = 'secure_plain_token';
 const SERVER = 'https://chatapp-backend-m6bp.onrender.com';
 
-const cleanNumber = (num) => String(num).replace(/[\s\-()]/g, ''); 
 export default function RegistrationScreen() {
   const { refreshSession } = useAuth();
   const [db, setDb] = useState(null);
@@ -74,64 +73,16 @@ export default function RegistrationScreen() {
     initializeAppEngine();
   }, []);
 
-  // 2. CONTACT SYNCHRONIZATION PIPELINE
-const runAddressBookSync = async (databaseInstance) => {
-  try {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      console.log('Address book read permissions were denied by user.');
-      return;
+  // 2. CONTACT SYNCHRONIZATION PIPELINE (logic lives in src/contacts/syncContacts.js)
+  const runAddressBookSync = async (databaseInstance) => {
+    try {
+      await syncAddressBook(databaseInstance);
+    } catch (err) {
+      console.error('Background data sync pipeline tracking failure:', err);
     }
+  };
 
-    const { data } = await Contacts.getContactsAsync({
-      fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
-    });
-    if (!data || data.length === 0) return;
-
-    // clean phone number -> the name saved in the user's phone book.
-    // Keys are unique, so this also removes duplicate numbers.
-    const nameByPhone = new Map();
-    for (const contact of data) {
-      for (const p of contact.phoneNumbers ?? []) {
-        if (!p.number) continue;
-        const phone = cleanNumber(p.number);
-        if (!nameByPhone.has(phone)) {
-          nameByPhone.set(phone, contact.name || 'No Name');
-        }
-      }
-    }
-    if (nameByPhone.size === 0) return;
-
-    const response = await fetch(`${SERVER}/api/auth/sync-bulk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumbers: [...nameByPhone.keys()] }),
-    });
-
-    if (!response.ok) {
-      console.log('Contact sync rejected by server:', response.status);
-      return;
-    }
-
-    const { matches } = await response.json();
-
-    for (const m of matches ?? []) {
-      // Prefer the name from the phone book, fall back to the app username
-      const displayName = nameByPhone.get(cleanNumber(m.phone_number)) || m.username;
-
-      // INSERT OR IGNORE keeps any existing local name
-      await databaseInstance.runAsync(
-        'INSERT OR IGNORE INTO app_users (user_id, name, phone) VALUES (?, ?, ?)',
-        [String(m.user_id), String(displayName), String(m.phone_number)]
-      );
-    }
-    console.log(`Cached ${matches?.length ?? 0} app contacts.`);
-  } catch (err) {
-    console.error('Background data sync pipeline tracking failure:', err);
-  }
-};
-
-    // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
+  // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
   const handleValidateAndSubmit = async () => {
     const trimmedFirst = firstName.trim();
     const trimmedLast = lastName.trim();
@@ -147,6 +98,7 @@ const runAddressBookSync = async (databaseInstance) => {
       Alert.alert('Validation Error', 'Please enter a valid phone number.');
       return;
     }
+    const normalizedPhone = normalizePhone(trimmedPhone); // +254... so contact matching works
 
     if (!deviceId || !db) {
       Alert.alert('System Error', 'System engines are initializing. Please wait a moment.');
@@ -154,7 +106,7 @@ const runAddressBookSync = async (databaseInstance) => {
     }
 
     const fullName = `${trimmedFirst} ${trimmedLast}`;
-    const payload = { userName: fullName, phoneNumber: trimmedPhone, deviceId };
+    const payload = { userName: fullName, phoneNumber: normalizedPhone, deviceId };
     setLoading(true);
 
     try {
@@ -182,7 +134,7 @@ const runAddressBookSync = async (databaseInstance) => {
       // B. Seed personal login info inside local session table layout
       await db.runAsync(
         'INSERT OR REPLACE INTO session (user_id, plain_token, device_id, full_name, phone) VALUES (?, ?, ?, ?, ?)',
-        [String(userId), String(plainToken), String(deviceId), fullName, trimmedPhone]
+        [String(userId), String(plainToken), String(deviceId), fullName, normalizedPhone]
       );
 
       // C. EXECUTE THE CONTACT SYNC ENGINE (Direct sequential runtime trigger)
