@@ -151,8 +151,7 @@ export default function RegistrationScreen() {
     }
 
     const fullName = `${trimmedFirst} ${trimmedLast}`;
-    const payload = { name: fullName, phone: trimmedPhone, deviceId: deviceId };
-
+    const payload = { userName: fullName, phoneNumber: trimmedPhone, deviceId };
     setLoading(true);
 
     try {
@@ -161,6 +160,9 @@ export default function RegistrationScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (!response.ok || !data.success) {
+           throw new Error(data.message || 'Registration failed');
+       }
 
       if (response.ok) {
         const data = await response.json();
