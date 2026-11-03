@@ -12,6 +12,7 @@ const USER_ID_KEY = 'secure_user_id';
 const PLAIN_TOKEN_KEY = 'secure_plain_token';
 const SERVER = 'https://chatapp-backend-m6bp.onrender.com';
 
+const cleanNumber = (num) => String(num).replace(/[\s\-()]/g, ''); 
 export default function RegistrationScreen() {
   const { refreshSession } = useAuth();
   const [db, setDb] = useState(null);
@@ -130,7 +131,7 @@ const runAddressBookSync = async (databaseInstance) => {
   }
 };
 
-  // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
+    // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
   const handleValidateAndSubmit = async () => {
     const trimmedFirst = firstName.trim();
     const trimmedLast = lastName.trim();
@@ -157,60 +158,60 @@ const runAddressBookSync = async (databaseInstance) => {
     setLoading(true);
 
     try {
-      const response = await fetch('https://chatapp-backend-m6bp.onrender.com/api/auth/register', {
+      const response = await fetch(`${SERVER}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      
 
-      if (response.ok) {
-        const data = await response.json();
-        
-        const userId = data.userId ; 
-        const plainToken = data.plainToken;
+      // Parse first so `data` exists for the check below
+      const data = await response.json();
 
-        // A. Store credentials securely inside Keychain hardware memory layers
-        await SecureStore.setItemAsync(USER_ID_KEY, String(userId));
-        await SecureStore.setItemAsync(PLAIN_TOKEN_KEY, String(plainToken));
-
-        // B. Seed personal login info inside local session table layout
-        await db.runAsync(
-          'INSERT OR REPLACE INTO session (user_id, plain_token, device_id, full_name, phone) VALUES (?, ?, ?, ?, ?)',
-          [String(userId), String(plainToken), String(deviceId), fullName, trimmedPhone]
-        );
-
-        // C. EXECUTE THE CONTACT SYNC ENGINE (Direct sequential runtime trigger)
-        await runAddressBookSync(db);
-
-        Alert.alert(
-          'Success', 
-          `Account verified!\nYour contacts are ready and your local session is safe.`,
-          [
-            { 
-              text: 'Open App', 
-              onPress: async () => {
-                setFirstName('');
-                setLastName('');
-                setPhoneNumber('');
-
-                // Re-read the stored token so the root layout's route guard flips
-                // to authenticated and moves the user to the chats list
-                await refreshSession();
-              }
-            }
-          ]
-        );
-      } else {
-        throw new Error('Database server rejected registration transaction.');
+      // One check covers HTTP errors (409, 500...) and success: false
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Registration failed');
       }
+
+      const userId = data.userId;
+      const plainToken = data.token; // backend returns `token`, not `plainToken`
+
+      // A. Store credentials securely inside Keychain hardware memory layers
+      await SecureStore.setItemAsync(USER_ID_KEY, String(userId));
+      await SecureStore.setItemAsync(PLAIN_TOKEN_KEY, String(plainToken));
+
+      // B. Seed personal login info inside local session table layout
+      await db.runAsync(
+        'INSERT OR REPLACE INTO session (user_id, plain_token, device_id, full_name, phone) VALUES (?, ?, ?, ?, ?)',
+        [String(userId), String(plainToken), String(deviceId), fullName, trimmedPhone]
+      );
+
+      // C. EXECUTE THE CONTACT SYNC ENGINE (Direct sequential runtime trigger)
+      await runAddressBookSync(db);
+
+      Alert.alert(
+        'Success',
+        `Account verified!\nYour contacts are ready and your local session is safe.`,
+        [
+          {
+            text: 'Open App',
+            onPress: async () => {
+              setFirstName('');
+              setLastName('');
+              setPhoneNumber('');
+
+              // Re-read the stored token so the root layout's route guard flips
+              // to authenticated and moves the user to the chats list
+              await refreshSession();
+            },
+          },
+        ]
+      );
     } catch (error) {
-      Alert.alert('Network Failure', error.message || 'Could not register user to DB.');
+      Alert.alert('Registration failed', error.message || 'Could not register user.');
     } finally {
       setLoading(false);
     }
   };
-
   if (!appReady) {
     return (
       <View style={styles.centeredContainer}>
