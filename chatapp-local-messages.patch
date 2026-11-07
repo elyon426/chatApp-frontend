@@ -1,0 +1,309 @@
+diff --git a/src/app/(auth)/chat.jsx b/src/app/(auth)/chat.jsx
+index 9193dcc..b0fd309 100644
+--- a/src/app/(auth)/chat.jsx
++++ b/src/app/(auth)/chat.jsx
+@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
+ import { useEffect, useRef, useState } from 'react';
+ import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+ import { useSafeAreaInsets } from 'react-native-safe-area-context';
++import { ensureMessagesTable, getDb, loadMessages, loadPendingMessages, makeMessageId, saveMessage, setMessageStatus } from '../../db/messages';
+ import { sameId } from '../../utils/normalize';
+ 
+ export default function IndividualChatScreen() {
+@@ -18,108 +19,139 @@ export default function IndividualChatScreen() {
+   // Use refs to persist socket and timers across re-renders
+   const socketRef = useRef(null);
+   const heartbeatTimerRef = useRef(null);
++  const dbRef = useRef(null);
++  const myIdRef = useRef(null);
++
++  const updateStatusInState = (messageId, status) =>
++    setMessages((prev) => prev.map((m) => (m.message_id === messageId ? { ...m, status } : m)));
++
++  // Send one stored message over the socket if it is open. Otherwise it stays 'pending'.
++  const sendOverSocket = (msg) => {
++    const ws = socketRef.current;
++    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
++    // The server expects: messageId, targetId, content (and optional mediaUrl)
++    ws.send(JSON.stringify({
++      messageId: msg.message_id,
++      targetId: String(contactId),
++      content: msg.content,
++      mediaUrl: msg.media_url,
++    }));
++    return true;
++  };
+ 
+-  // 1. Establish User Identity & Initialize WebSockets
++  // 1. Load saved history first, then connect the socket
+   useEffect(() => {
+     let active = true;
+ 
+     async function initializeChatSession() {
+       const savedUid = await SecureStore.getItemAsync('secure_user_id');
+       const token = await SecureStore.getItemAsync('secure_plain_token');
+-      
+       if (!active) return;
+-      setMyUserId(savedUid || 'me');
++      myIdRef.current = savedUid;
++      setMyUserId(savedUid);
++
++      // Local history: works offline and survives closing the app
++      const db = await getDb();
++      dbRef.current = db;
++      await ensureMessagesTable(db);
++      const history = await loadMessages(db, contactId);
++      if (!active) return;
++      setMessages(history);
+ 
+-      // Connect to your WebSocket endpoint (passing token via query string if required)
+       const wsUrl = `wss://chat-server-docker-fy2r.onrender.com?token=${encodeURIComponent(token)}`;
+       const ws = new WebSocket(wsUrl);
+       socketRef.current = ws;
+ 
+-      ws.onopen = () => {
+-        console.log('WebSocket Connected successfully.');
++      ws.onopen = async () => {
+         setConnected(true);
+ 
+-        // --- HEARTBEAT TIMEOUT GUARD ---
+-        // Every 30 seconds, send an empty JSON object to keep the socket alive
++        // Resend anything that was written while offline
++        const pending = await loadPendingMessages(db, contactId);
++        pending.forEach((m) => sendOverSocket(m));
++
++        // Keep the socket alive (the server ignores empty frames)
+         heartbeatTimerRef.current = setInterval(() => {
+-          if (ws.readyState === WebSocket.OPEN) {
+-            ws.send(JSON.stringify({})); 
+-            console.log('Heartbeat ping sent.');
+-          }
+-        }, 30000); 
++          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({}));
++        }, 30000);
+       };
+ 
+-      ws.onmessage = (event) => {
++      ws.onmessage = async (event) => {
+         try {
+           const data = JSON.parse(event.data);
+-          
+-          // Check if payload is an acknowledgment, empty heartbeat, or valid message
+           if (!data || Object.keys(data).length === 0) return;
+ 
+-          // Handle array of backlogged offline messages or a single text object
+-          if (Array.isArray(data.messages)) {
+-            // Server returned offline catch-up list
+-            setMessages((prev) => [...data.messages, ...prev]);
+-          } else if (data.text) {
+-            // Incoming real-time message packet
+-            const incomingMsg = {
+-              id: data.id || Date.now().toString(),
+-              text: data.text,
+-              senderId: data.senderId
++          // Server confirmations for messages I sent
++          if (data.status === 'msg_ack' || data.status === 'cached_offline') {
++            await setMessageStatus(db, data.messageId, 'sent');
++            updateStatusInState(data.messageId, 'sent');
++            return;
++          }
++
++          if (data.type === 'AUTH_ERROR') {
++            console.error('Chat server rejected the token:', data.error);
++            return;
++          }
++          if (data.type) return; // AUTH_SUCCESS and other control frames
++
++          // An incoming message. Save ALL of them (including ones from other
++          // contacts delivered from the offline inbox), show only this chat's.
++          if (data.messageId && data.senderId && (data.content || data.mediaUrl)) {
++            const incoming = {
++              message_id: String(data.messageId),
++              contact_id: String(data.senderId),
++              sender_id: String(data.senderId),
++              content: data.content ?? null,
++              media_url: data.mediaUrl ?? null,
++              timestamp: data.timestamp || new Date().toISOString(),
++              status: 'received',
+             };
+-            setMessages((prev) => [incomingMsg, ...prev]);
++            await saveMessage(db, incoming);
++            if (sameId(incoming.contact_id, contactId)) {
++              setMessages((prev) =>
++                prev.some((m) => m.message_id === incoming.message_id) ? prev : [incoming, ...prev]
++              );
++            }
+           }
+         } catch (err) {
+-          console.error("Error parsing incoming message packet:", err);
++          console.error('Error handling incoming packet:', err);
+         }
+       };
+ 
+-      ws.onerror = (error) => {
+-        console.error('WebSocket connection error encountered:', error);
+-      };
+-
++      ws.onerror = (error) => console.error('WebSocket error:', error);
+       ws.onclose = () => {
+-        console.log('WebSocket connection closed.');
+         setConnected(false);
+         clearInterval(heartbeatTimerRef.current);
+       };
+     }
+ 
+-    initializeChatSession();
++    initializeChatSession().catch((err) => console.error('Chat init failed:', err));
+ 
+-    // Cleanup: Terminate connection and clear timers when user exits the screen
+     return () => {
+       active = false;
+-      if (socketRef.current) {
+-        socketRef.current.close();
+-      }
+-      if (heartbeatTimerRef.current) {
+-        clearInterval(heartbeatTimerRef.current);
+-      }
++      if (socketRef.current) socketRef.current.close();
++      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+     };
+   }, [contactId]);
+ 
+-  // 2. Dispatch Text Output Message
+-  const handleSendMessage = () => {
+-    if (!inputText.trim()) return;
+-
+-    const messagePayload = {
+-      id: Date.now().toString(),
+-      text: inputText.trim(),
+-      senderId: myUserId,
+-      receiverId: contactId
++  // 2. Send: save locally FIRST, then try the network
++  const handleSendMessage = async () => {
++    const text = inputText.trim();
++    if (!text || !myIdRef.current || !dbRef.current) return;
++
++    const msg = {
++      message_id: makeMessageId(),
++      contact_id: String(contactId),
++      sender_id: String(myIdRef.current),
++      content: text,
++      media_url: null,
++      timestamp: new Date().toISOString(),
++      status: 'pending',
+     };
+ 
+-    // Render immediately locally for optimal user experience
+-    setMessages((prev) => [messagePayload, ...prev]);
+     setInputText('');
+-
+-    // Pipe directly out through active socket connection
+-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+-      socketRef.current.send(JSON.stringify(messagePayload));
+-    } else {
+-      console.warn("Socket disconnected. Message cached locally only.");
+-    }
++    setMessages((prev) => [msg, ...prev]);
++    await saveMessage(dbRef.current, msg);
++    sendOverSocket(msg); // if offline it stays 'pending' and is resent on reconnect
+   };
+ 
+   return (
+@@ -142,15 +174,20 @@ export default function IndividualChatScreen() {
+       <FlatList
+         data={messages}
+         inverted
+-        keyExtractor={(item) => item.id}
++        keyExtractor={(item) => item.message_id}
+         contentContainerStyle={styles.listContent}
+         renderItem={({ item }) => {
+-          const isMe = sameId(item.senderId, myUserId);
++          const isMe = sameId(item.sender_id, myUserId);
+           return (
+             <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
+               <Text style={[styles.msgText, isMe ? styles.textMe : styles.textThem]}>
+-                {item.text}
++                {item.content}
+               </Text>
++              {isMe && (
++                <Text style={styles.tick}>
++                  {item.status === 'pending' ? '🕓' : item.status === 'failed' ? '!' : '✓'}
++                </Text>
++              )}
+             </View>
+           );
+         }}
+@@ -189,6 +226,7 @@ const styles = StyleSheet.create({
+   bubbleMe: { backgroundColor: '#007AFF', alignSelf: 'flex-end', borderBottomRightRadius: 2 },
+   bubbleThem: { backgroundColor: '#e9ecef', alignSelf: 'flex-start', borderBottomLeftRadius: 2 },
+   msgText: { fontSize: 15, lineHeight: 20 },
++  tick: { color: '#cfe3ff', fontSize: 10, alignSelf: 'flex-end', marginTop: 2 },
+   textMe: { color: '#fff' },
+   textThem: { color: '#212529' },
+   inputBar: { flexDirection: 'row', paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#fff', gap: 12, alignItems: 'center', borderTopWidth: 1, borderColor: '#eee' },
+diff --git a/src/db/messages.js b/src/db/messages.js
+new file mode 100644
+index 0000000..4f6935a
+--- /dev/null
++++ b/src/db/messages.js
+@@ -0,0 +1,60 @@
++import * as SQLite from 'expo-sqlite';
++
++// One shared connection to the same database file the rest of the app uses
++let dbPromise = null;
++export function getDb() {
++  if (!dbPromise) dbPromise = SQLite.openDatabaseAsync('chat_app.db');
++  return dbPromise;
++}
++
++/** UUID-shaped id generated on the phone so retries can't create duplicates. */
++export function makeMessageId() {
++  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
++    const r = (Math.random() * 16) | 0;
++    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
++  });
++}
++
++export async function ensureMessagesTable(db) {
++  await db.execAsync(`
++    CREATE TABLE IF NOT EXISTS messages (
++      message_id TEXT PRIMARY KEY,
++      contact_id TEXT NOT NULL,   -- the other person in the conversation
++      sender_id  TEXT NOT NULL,   -- who wrote it (me or the contact)
++      content    TEXT,
++      media_url  TEXT,
++      timestamp  TEXT NOT NULL,   -- ISO string
++      status     TEXT NOT NULL    -- pending | sent | failed | received
++    );
++    CREATE INDEX IF NOT EXISTS idx_messages_contact_time ON messages(contact_id, timestamp);
++  `);
++}
++
++/** Ignores a message we already have, so duplicate deliveries are harmless. */
++export async function saveMessage(db, m) {
++  await db.runAsync(
++    `INSERT OR IGNORE INTO messages (message_id, contact_id, sender_id, content, media_url, timestamp, status)
++     VALUES (?, ?, ?, ?, ?, ?, ?)`,
++    [m.message_id, m.contact_id, m.sender_id, m.content ?? null, m.media_url ?? null, m.timestamp, m.status]
++  );
++}
++
++export async function setMessageStatus(db, messageId, status) {
++  await db.runAsync('UPDATE messages SET status = ? WHERE message_id = ?', [status, messageId]);
++}
++
++/** Newest first, which is what an inverted FlatList wants. */
++export async function loadMessages(db, contactId, limit = 300) {
++  return db.getAllAsync(
++    'SELECT * FROM messages WHERE contact_id = ? ORDER BY timestamp DESC LIMIT ?',
++    [String(contactId), limit]
++  );
++}
++
++/** Messages I wrote that the server has not confirmed yet, oldest first. */
++export async function loadPendingMessages(db, contactId) {
++  return db.getAllAsync(
++    "SELECT * FROM messages WHERE contact_id = ? AND status = 'pending' ORDER BY timestamp ASC",
++    [String(contactId)]
++  );
++}
