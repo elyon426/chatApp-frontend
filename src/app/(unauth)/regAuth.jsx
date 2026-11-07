@@ -1,5 +1,6 @@
 import * as Application from 'expo-application';
-import { normalizePhone, syncAddressBook } from '../../contacts/syncContacts';
+import { syncAddressBook } from '../../contacts/syncContacts';
+import { normalizeName, normalizePhone } from '../../utils/normalize';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { useEffect, useState } from 'react';
@@ -84,28 +85,27 @@ export default function RegistrationScreen() {
 
   // 3. MAIN FORM REGISTRATION ACTION SUBMIT PIPELINE
   const handleValidateAndSubmit = async () => {
-    const trimmedFirst = firstName.trim();
-    const trimmedLast = lastName.trim();
-    const trimmedPhone = phoneNumber.trim();
+    const first = normalizeName(firstName);
+    const last = normalizeName(lastName);
 
-    if (!trimmedFirst || !trimmedLast || !trimmedPhone) {
+    if (!first || !last || !phoneNumber.trim()) {
       Alert.alert('Validation Error', 'All fields are required.');
       return;
     }
 
-    const phoneRegex = /^\+?[0-9\s\-]{7,15}$/;
-    if (!phoneRegex.test(trimmedPhone)) {
+    // One canonical format (+254712345678) so people can find each other
+    const normalizedPhone = normalizePhone(phoneNumber);
+    if (!normalizedPhone) {
       Alert.alert('Validation Error', 'Please enter a valid phone number.');
       return;
     }
-    const normalizedPhone = normalizePhone(trimmedPhone); // +254... so contact matching works
 
     if (!deviceId || !db) {
       Alert.alert('System Error', 'System engines are initializing. Please wait a moment.');
       return;
     }
 
-    const fullName = `${trimmedFirst} ${trimmedLast}`;
+    const fullName = `${first} ${last}`;
     const payload = { userName: fullName, phoneNumber: normalizedPhone, deviceId };
     setLoading(true);
 

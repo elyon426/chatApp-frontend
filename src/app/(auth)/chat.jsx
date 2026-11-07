@@ -1,10 +1,14 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { useEffect, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { sameId } from '../../utils/normalize';
 
 export default function IndividualChatScreen() {
   const { contactId, contactName } = useLocalSearchParams();
+  const router = useRouter();
+  const insets = useSafeAreaInsets(); // status bar / gesture bar / 3-button nav bar heights
   
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -120,11 +124,15 @@ export default function IndividualChatScreen() {
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 60}
+      // 'padding' works on both platforms now that Android is edge-to-edge.
+      // The stack header is hidden for this screen, so no offset is needed.
+      behavior="padding"
       style={styles.container}
     >
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
+          <Text style={styles.backText}>‹ Back</Text>
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>{contactName || 'Chat Room'}</Text>
         <Text style={[styles.statusText, connected ? styles.online : styles.offline]}>
           {connected ? '● connected' : '○ connecting...'}
@@ -137,7 +145,7 @@ export default function IndividualChatScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
-          const isMe = item.senderId === myUserId;
+          const isMe = sameId(item.senderId, myUserId);
           return (
             <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
               <Text style={[styles.msgText, isMe ? styles.textMe : styles.textThem]}>
@@ -148,15 +156,18 @@ export default function IndividualChatScreen() {
         }}
       />
 
-      <View style={styles.inputBar}>
+      <View style={[styles.inputBar, { paddingBottom: 10 + insets.bottom }]}>
         <TextInput
           style={styles.input}
           placeholder="Type message..."
           placeholderTextColor="#999"
           value={inputText}
           onChangeText={setInputText}
+          returnKeyType="send"
+          onSubmitEditing={handleSendMessage}
+          blurOnSubmit={false}
         />
-        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage}>
+        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} hitSlop={8}>
           <Text style={styles.sendText}>Send</Text>
         </TouchableOpacity>
       </View>
@@ -166,7 +177,9 @@ export default function IndividualChatScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { paddingTop: Platform.OS === 'ios' ? 15 : 20, paddingBottom: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#e0e0e0', alignItems: 'center' },
+  header: { paddingBottom: 12, backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#e0e0e0', alignItems: 'center' },
+  backText: { color: '#007AFF', fontSize: 17 },
+  backBtn: { position: 'absolute', left: 14, bottom: 14 },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#212529' },
   statusText: { fontSize: 11, marginTop: 2, fontWeight: '600' },
   online: { color: '#4CD964' },

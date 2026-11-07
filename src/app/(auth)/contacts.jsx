@@ -1,4 +1,4 @@
-import * as Contacts from 'expo-contacts';
+import { ensureTables, syncAddressBook } from '../../contacts/syncContacts';
 import { useRouter } from 'expo-router';
 import * as SQLite from 'expo-sqlite';
 import { Users } from 'lucide-react-native';
@@ -15,6 +15,7 @@ export default function ChatsListScreen() {
   const fetchLocalVerifiedContacts = async () => {
     try {
       const db = await SQLite.openDatabaseAsync('chat_app.db');
+      await ensureTables(db);
       const cachedUsers = await db.getAllAsync('SELECT * FROM app_users ORDER BY name ASC');
       setContacts(cachedUsers);
     } catch (error) {
@@ -25,53 +26,14 @@ export default function ChatsListScreen() {
     }
   };
 
-  // 2. Pull-to-refresh synchronization logic
+  // 2. Pull-to-refresh synchronization logic (shared with registration)
   const handlePullToRefresh = async () => {
     setRefreshing(true);
     try {
       const db = await SQLite.openDatabaseAsync('chat_app.db');
-
-      // Request contact access permissions
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status === 'granted') {
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
-        });
-
-        if (data && data.length > 0) {
-          const contactPayload = data
-            .filter(c => c.phoneNumbers && c.phoneNumbers.length > 0)
-            .map(c => ({
-              name: c.name,
-              phone: c.phoneNumbers[0].number.replace(/[\s\-()]/g, '')
-            }));
-
-          // Send updated local contact book list to your server backend 
-          const syncResponse = await fetch('https://chatapp-backend-m6bp.onrender.com/api/contacts/sync-bulk', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contacts: contactPayload }),
-          });
-
-          if (syncResponse.ok) {
-            const verifiedUsersArray = await syncResponse.json();
-
-            // Store new matching profiles to local SQLite cache
-            for (const matchedUser of verifiedUsersArray) {
-              const matchedPhoneClean = matchedUser.phone.replace(/[\s\-()]/g, '');
-              const localItem = contactPayload.find(c => c.phone === matchedPhoneClean);
-              const finalDisplayName = localItem ? localItem.name : matchedUser.name;
-
-              await db.runAsync(
-                'INSERT OR IGNORE INTO app_users (user_id, name, phone) VALUES (?, ?, ?)',
-                [String(matchedUser.userId), String(finalDisplayName), String(matchedUser.phone)]
-              );
-            }
-          }
-        }
-      }
+      await syncAddressBook(db);
     } catch (err) {
-      console.error("Refresh sync error:", err);
+      console.error('Refresh sync error:', err);
     } finally {
       // Re-read local records to pull fresh entries into state, then end animations
       await fetchLocalVerifiedContacts();

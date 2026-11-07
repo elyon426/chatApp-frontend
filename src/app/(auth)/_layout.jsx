@@ -30,8 +30,7 @@ export default function AuthLayout() {
       <Stack.Screen
         name="chat"
         options={{
-          title: '', // Custom title is built in chat.jsx
-          headerBackTitle: 'Back', // iOS back arrow button text
+          headerShown: false, // chat.jsx draws its own header with safe-area padding
         }}
       />
     </Stack>
